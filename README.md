@@ -5,8 +5,8 @@ Authors: Zoe W. Hawks, Roger Strong, Lanee Jung, Emorie D. Beck, Eliza J. Passel
 
 Description of files:
 
-(1) Links to cognitive EMA tasks (CogEMA_tasks.txt)
-(2) Data analyzed for current study (cleanData.rds)
-(3) Code to analyze and visualize data (BayesianPrediction.Rmd and VisualizeResults.R, respectively)
+(1) Links to cognitive EMA tasks (CogEMA_tasks.txt)\n
+(2) Data analyzed for current study (cleanData.rds)\n
+(3) Code to analyze and visualize data (BayesianPrediction.Rmd and VisualizeResults.R, respectively)\n
 
 Please address all correspondence to zhawks@mclean.harvard.edu
