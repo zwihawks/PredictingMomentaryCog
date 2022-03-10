@@ -1,0 +1,271 @@
+---
+title: "Bayesian Prediction"
+author: "Zoë Hawks"
+date: "3/10/2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(tidyverse)
+library(foreach)
+library(ggplot2)
+library(bayesplot) 
+library(brms)
+library(rstan)
+library(caret)
+library(rsample)
+library(tidybayes)
+library(loo)
+library(furrr)
+library(lme4)
+```
+
+# Functions
+```{r}
+cent_scale <- function(dat, method = c("GM", "CWC")) {
+  
+  method <- match.arg(method)
+  
+  if (method == "GM") {
+    
+    # grand mean centering
+    df <- dat %>%
+      mutate_if(is.numeric, ~((.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE)))
+    
+  } else if (method == "CWC") {
+
+    # scale numeric data within clusters
+    df <- dat %>%
+      group_by(user_id) %>%
+      mutate_if(is.numeric, ~((.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE))) %>%
+      mutate_if(is.numeric, ~if_else(is.nan(.), 0, .)) %>%
+      ungroup()
+    
+  } else {
+    print("ERROR")
+  }
+  
+  return(df)
+}
+
+modeling_func <- function(train, key, chain_num = 4, cores = 4,
+                          iter_num = 2000, mod = c("all", "WP", "int")) {
+  
+  mod <- match.arg(mod)
+  
+  # create formula to evaluate all variables in relation to cog outcomes
+  df_all <- train %>% select(-value, -user_id, -study_time, -sitting_id)
+  formula_all <- paste0(names(df_all), collapse=" + ")
+  
+  # create formula to evaluate WP predictors of variation around WP means
+  to_elim <- c("age", "education", "gender", "englishPrimary",
+                "wakeUpTypical", "wakeUpEarliest", "wakeUpLatest",
+                "goToSleepTypical", "goToSleepEarliest", "goToSleepLatest",
+                "user_id", "value", "study_time", "screenW", "screenH", "sitting_id")
+  df_WP <- train %>% select(-all_of(to_elim))
+  formula_WP <- paste0(names(df_WP), collapse=" + ")
+  
+  # if - else logic
+  if (mod == "all") {
+    formula <- as.formula(paste0("value ~ 1 + ", formula_all, 
+                                 " + age:cos_studytime + age:sin_studytime + I(age^2) + (1 | user_id)"))
+    fit_bayes_horse <- brm(formula, 
+                           data = train, family = 'gaussian',
+                           prior = c(prior(horseshoe(df = 4), class = "b"),
+                                     prior(cauchy(0, 1), class = "sigma"),
+                                     prior(normal(0, 1), class = "sd"),
+                                     prior(normal(0, 1), class = "Intercept")),
+                           chains = chain_num, iter = iter_num,
+                           control = list(adapt_delta = .99, max_treedepth = 15),
+                           cores = 4, file = paste0(path, key, "_re"))
+  } else if (mod == "WP") {
+    formula <- as.formula(paste0("value ~ 1 + ", formula_WP, " + (1 | user_id)"))
+    fit_bayes_horse <- brm(formula, 
+                           data = train, family = 'gaussian',
+                           prior = c(prior(horseshoe(df = 4), class = "b"),
+                                     prior(cauchy(0, 1), class = "sigma"),
+                                     prior(normal(0, 1), class = "sd"),
+                                     prior(normal(0, 1), class = "Intercept")),
+                           chains = chain_num, iter = iter_num,
+                           control = list(adapt_delta = .99, max_treedepth = 15),
+                           cores = 4, file = paste0(path, key, "_fe"))
+  } else if (mod == "int") {
+    formula <- as.formula(paste0("value ~ 1 + (1 | user_id)"))
+    fit_bayes_horse <- brm(formula, 
+                           data = train, family = 'gaussian',
+                           prior = c(prior(cauchy(0, 1), class = "sigma"),
+                                     prior(normal(0, 1), class = "sd"),
+                                     prior(normal(0, 1), class = "Intercept")),
+                           chains = chain_num, iter = iter_num,
+                           control = list(adapt_delta = .99, max_treedepth = 15), 
+                           cores = 4, file = paste0(path, key, "_int"))
+  } else {
+    print("ERROR")
+  }
+  
+  return(fit_bayes_horse)
+}
+
+rmse <- function(y, yrep) {
+  yrep_mean <- colMeans(yrep)
+  return(sqrt(mean((yrep_mean - y)^2)))
+}
+
+R2 <- function(y, yrep) {
+  yrep_mean <- colMeans(yrep)
+  x <- cor.test(y, yrep_mean)
+  corre <- x$estimate**2
+  return(corre[[1]])
+}
+```
+
+```{r, messages = FALSE, warnings = FALSE}
+# stratified predicts new observations from the same sample
+# grouped predicts new individuals
+# reTrue takes random effects into account, reFalse doesn't
+# Int is random-effect, intercept-only model
+
+######################
+library(lmerTest)
+library(kableExtra)
+library(scales)
+
+# import data
+my_dat <- readRDS("~/insert_path_to_RDS_here.rds")
+
+# output data
+path <- "~/specify_output_directory_here/"
+
+run <- TRUE
+
+if (run) {
+  
+  # chose whether to analyze outcomes individually vs. in the aggregate
+  DVs <- c("GCPT_medianRTc")
+  
+  for (index in DVs) {
+    chain_num <- 4
+    fold_num <- 5
+    key_name <- index
+    
+    print(index)
+    
+    mapping_df_test <-
+      my_dat %>%
+      filter(key == key_name) %>%
+      ungroup() %>%
+      mutate(
+        data = map(.x = data, ~mutate(.x, cos_studytime = cos(study_time*2*pi))),
+        data = map(.x = data, ~mutate(.x, sin_studytime = sin(study_time*2*pi))),
+        data_GM = map(.x = data, ~cent_scale(.x, method = "GM")),
+        kfold_strat = map(.x = data, ~kfold_split_stratified(K = fold_num, x = .x$user_id)),
+        kfold_grouped = map(.x = data, ~kfold_split_grouped(K = fold_num, x = .x$user_id)),
+        fit_bayes_horse_reTrue = map2(.x = data_GM, .y = key,
+                                      ~modeling_func(.x, key = .y, mod = "all", chain_num = chain_num, iter_num = 5000)),
+        fit_bayes_horse_Int = map2(.x = data_GM, .y = key,
+                                   ~modeling_func(.x, key = .y, mod = "int", chain_num = chain_num, iter_num =10000)))
+    
+    mapping_df2 <-
+      mapping_df_test %>%
+      mutate(
+        fit_bayes_horse_reTrueCV_grouped = map2(.x = fit_bayes_horse_reTrue, .y = kfold_grouped,
+                                                ~kfold(.x, K = fold_num, folds = .y, save_fits = TRUE)),
+        fit_bayes_horse_reTrueCV_stratefied = map2(.x = fit_bayes_horse_reTrue, .y = kfold_strat,
+                                                   ~kfold(.x, K = fold_num, folds = .y, save_fits = TRUE)),
+        fit_bayes_horse_IntCV_grouped = map2(.x = fit_bayes_horse_Int, .y = kfold_grouped,
+                                             ~kfold(.x, K = fold_num, folds = .y, save_fits = TRUE)),
+        fit_bayes_horse_IntCV_stratefied = map2(.x = fit_bayes_horse_Int, .y = kfold_strat,
+                                                ~kfold(.x, K = fold_num, folds = .y, save_fits = TRUE)) )
+    
+    saveRDS(mapping_df2, paste0(path, key_name, "_CVfits.rds"))
+  }
+}
+```
+
+```{r}
+# next step: post-hoc analyses to disaggregate inter- and intra-individual variance for significant effects
+# restrict focus to self-report EMA variables bc we can't center age within clusters, and it 
+# doesn't make sense to talk about between-person variation in mean levels of time, study days, test position, etc.
+
+DV_list <- c("CRT_medianRTc", "DS_medianRTc", "GCPT_dprime", "MOT_percent_correct")
+
+for (i in DV_list) {
+  
+  if (i == "CRT_medianRTc") {
+    DV_WP <- c("alert_sleepiness", "attention_forgetful")
+  } else if (i == "DS_medianRTc") {
+    # Inserting composites given correlations >= .5
+    DV_WP <- c("context_composite", "alert_composite",
+               "anx_dep_emotions_that_everything_was_an_effort")
+  } else if (i == "GCPT_dprime") {
+    DV_WP <- c("PA_emotions_determined", "context_noisy", "context_concentrating", "interruptions_Interruptions")
+  } else if (i == "MOT_percent_correct") {
+    DV_WP <- c("stress_argument_stress", "context_noisy", "interruptions_Interruptions")
+  } else {
+    print("ERROR")
+  }
+  
+  formula_posthoc <-  as.formula(paste0("value ~ 1 + ", 
+                                        paste0(DV_WP, "_cm_c", collapse=" + "), 
+                                        " + ",
+                                        paste0(DV_WP, "_cwc", collapse=" + "),
+                                        " + (1 | user_id)"))
+  post_hoc_tests <-
+    my_dat %>%
+    filter(key == i) %>%
+    ungroup() %>%
+    mutate(
+      data = map(.x = data, ~mutate(.x, cos_studytime = cos(study_time*2*pi))),
+      data = map(.x = data, ~mutate(.x, sin_studytime = sin(study_time*2*pi))),
+      data = map(.x = data, ~mutate(.x, PA_emotions_alert_rs = rescale(PA_emotions_alert, to = c(0,1)))),
+      data = map(.x = data, ~mutate(.x, alert_sleepiness_rs = rescale(alert_sleepiness, to = c(0,1)))),
+      data = map(.x = data, ~mutate(.x, context_going_on_rs = rescale(context_going_on, to = c(0,1)))),
+      data = map(.x = data, ~mutate(.x, context_concentrating_rs = rescale(context_concentrating, to = c(0,1)))),
+      data = map(.x = data, ~mutate(.x, alert_composite = (PA_emotions_alert_rs - alert_sleepiness_rs)/2)),
+      data = map(.x = data, ~mutate(.x, context_composite = (context_going_on_rs + context_concentrating_rs)/2))
+      ) %>%
+    unnest(data) %>%
+    select(all_of(DV_WP), user_id, value) %>%
+    group_by(user_id) %>%
+    mutate_at(vars(all_of(DV_WP)), .funs = list("cm" = ~mean(.x, na.rm = TRUE),
+                                                "cwc" = ~((.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE)))) %>%
+    ungroup() %>%
+    mutate_at(vars(contains("cm")), .funs = list("c" = ~((.x - mean(.x, na.rm = TRUE)) / sd(.x, na.rm = TRUE)))) %>%
+    mutate_if(is.numeric, ~if_else(is.nan(.), 0, .)) # can't scale by SD if there's no variation
+    
+  tmp_mod <- 
+    lmer(formula_posthoc, data = post_hoc_tests) %>%
+    broom.mixed::tidy(., conf.int = TRUE) %>% mutate(var = i)
+  
+  if (i == DV_list[1]) {
+    mod <- tmp_mod
+  } else {
+    mod <- mod %>% bind_rows(tmp_mod)
+  }
+}
+
+mod2 <- 
+  mod %>%
+  arrange(var) %>%
+  filter(effect == "fixed")
+mod2 %>%
+  select(-var, -effect, -group) %>%
+  kbl("html", digits = 3) %>%
+  kable_classic(html_font = "Cambria", "basic", "center", full_width = F) %>%
+  column_spec(1:6, 
+              background = if_else(mod2$p.value < .1, "lightgray", "white"), 
+              color = if_else(str_detect(mod2$term, "cwc"), "red", "black")) %>%
+  pack_rows(index = table(mod2$var)) %>%
+  cat(., file = "~/specify_output_directory_here/filename.html")
+```
+
