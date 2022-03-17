@@ -19,6 +19,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #---------------------------
 # Part 1: Prep data, create output directories, load libraries
 #---------------------------
+# change home to directory that contains data & functions; otherwise, will assume current wd
 home <- ""
 if (home == "") {
   home <- getwd()
@@ -26,6 +27,7 @@ if (home == "") {
   setwd(home)
 }
 
+# source functions, read in data, load libraries
 source("BayesianPredictionFuncs.R")
 my_dat <- readRDS("cleanData.rds")
 load_libraries()
@@ -43,7 +45,7 @@ if (!dir.exists(paste0(home, "/outputs"))) {
   print("Directory already exists")
 }
 
-# output data
+# output folder
 path <- paste0(home, "/model_results/")
 ```
 
