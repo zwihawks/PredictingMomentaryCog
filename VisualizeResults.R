@@ -7,7 +7,7 @@
 # -------------------------------
 # Part 1: Analysis prep
 # -------------------------------
-# source functions, read in RDS file, & load libraries
+# change path to to directory that contains data & functions; otherwise, will assume current wd
 path <- ""
 if (path == "") {
   path <- getwd()
@@ -15,10 +15,12 @@ if (path == "") {
   setwd(path)
 }
 
+# source functions, read in data, load libraries
 source("VisualizeResultsFuncs.R")
 clean_cor_dat <- readRDS("cleanData.rds")
 load_libraries()
 
+# create output directories
 if (!dir.exists(paste0(path, "/outputs"))) {
   dir.create(paste0(path, "/outputs"))
 } else {
