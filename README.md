@@ -6,9 +6,9 @@ Authors: Zoe W. Hawks, Roger Strong, Lanee Jung, Emorie D. Beck, Eliza J. Passel
 #### Description of files:
 
 1. Links to cognitive EMA tasks (CogEMA_tasks.txt).  
-2. Data analyzed for current study (cleanData.rds).  
-3. Code to analyze (BayesianPrediction.Rmd) and visualize (VisualizeResults.R) data.  
-2. Functions sourced by BayesianPrediction.Rmd (BayesianPredictionFuncs.R) and VisualizeResults.R (VisualizeResultsFuncs.R).  
+2. Data analyzed in current study (cleanData.rds).  
+3. Analysis (BayesianPrediction.Rmd) and visualization (VisualizeResults.R) code.  
+2. Functions sourced by analysis (BayesianPredictionFuncs.R) and visualization (VisualizeResultsFuncs.R) code.  
 
 #### Additional notes:  
 
