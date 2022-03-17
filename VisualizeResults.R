@@ -4,125 +4,30 @@
 # date: "3/10/2022"
 # -------------------------------
 
-library(tidyverse)
-library(foreach)
-library(ggplot2)
-library(bayesplot) 
-library(brms)
-library(rstan)
-library(caret)
-library(rsample)
-library(tidybayes)
-library(loo)
-library(ggpubr)
-library(ggrepel)
-library(ggforce)
-library(ggpmisc)
-library(ggtext)
-library(kableExtra)
-library(bayestestR)
-library(cowplot)
-library(corrr)
-library(ggcorrplot)
-library(corrplot)
-library(performance)
-
 # -------------------------------
-# Functions
+# Part 1: Analysis prep
 # -------------------------------
-
-rmse <- function(y, yrep) {
-  return(sqrt(mean((yrep - y)^2)))
+# source functions, read in RDS file, & load libraries
+path <- ""
+if (path == "") {
+  path <- getwd()
+} else {
+  setwd(path)
 }
 
-R2 <- function(y, yrep) {
-  x <- cor.test(y, yrep)
-  cor <- x$estimate[[1]]**2
-  lower <- x$conf.int[[1]]**2
-  upper <- x$conf.int[[2]]**2
-  return(c(cor, lower, upper))
-}
+source("VisualizeResultsFuncs.R")
+clean_cor_dat <- readRDS("cleanData.rds")
+load_libraries()
 
-unnest_kfold <- function(kfld, folds, widths) {
-  for (i in 1:folds) {
-    tmp <- kfld$fits[i,]$fit %>%
-      gather_draws(., `b_.*`, regex = TRUE) %>% 
-      mean_qi(.width = widths) %>% 
-      mutate(fold = i)
-    
-    if (i == 1) {
-      df <- tmp
-    } else {
-      df <- df %>% bind_rows(tmp)
-    }
-  }
-  return(df)
-}
-
-perf_cal <- function(kf, kfp, method = c("avg", "ind")) {
-  method <- match.arg(method)
-  
-  pr <- kf$fits[, "predicted"]
-  n_folds <- length(pr)
-  post_draws <- nrow(kfp$yrep)
-  
-  if (method == "ind") {
-    fold <- rep(1:n_folds, each = post_draws)
-    df <- data.frame(fold = fold, perfor = fold)
-  } else if (method == "avg") {
-    fold <- rep(1:n_folds, each = 1)
-    df <- data.frame(fold = fold, perfor = fold, lower = fold, upper = fold)
-  }
-  
-  m <- 1
-  for (i in 1:n_folds) {
-    
-    if (method == "ind") {
-      for (j in 1:post_draws) {
-        real <- kfp$y[pr[[i]]]
-        predicted <- kfp$yrep[j, pr[[i]]]
-        
-        r2 <- R2(real, predicted)[[1]]
-        
-        df[m, 2] <- r2
-        m <- m + 1
-      }
-    } else if (method == "avg") {
-      real <- kfp$y[pr[[i]]]
-      predicted <- colMeans(kfp$yrep[, pr[[i]]])
-      r2 <- R2(real, predicted)
-      
-      df[m, 2] <- r2[[1]]
-      df[m, 3] <- r2[[2]]
-      df[m, 4] <- r2[[3]]
-      m <- m + 1
-    }
-    print(i)
-  }
-  return(df)
-}
-
-recode_func <- function(vector) {
-  vector <- if_else(str_detect(vector, "ageE2"), "age^2", vector)
-  vector <- if_else(str_detect(vector, "attention_organization"), "attention_diff_organization", as.character(vector))
-  vector <- if_else(str_detect(vector, "context_concentrating"), "context_diff_concentrating", as.character(vector))
-  vector <- if_else(str_detect(vector, "everything_was_an_effort"), "everything_an_effort", as.character(vector))
-  vector <- if_else(str_detect(vector, "nothing_could_cheer"), "sad_no_cheer", as.character(vector))
-  vector <- if_else(str_detect(vector, "restless_or_"), "restless_fidgety", as.character(vector))
-  vector <- str_remove_all(vector, c("_stress$"))
-  vector <- str_remove_all(vector, c("emotions_"))
-  vector <- str_remove_all(vector, c("anx_dep_|_Interruptions"))
-
-  return(vector)
+if (!dir.exists(paste0(path, "/outputs"))) {
+  dir.create(paste0(path, "/outputs"))
+} else {
+  print("Directory already exists")
 }
 
 # -------------------------------
-# Cog correlations
+# Part 2: Cog correlations
 # -------------------------------
-
-path_new <- "specify_directory_here"
-clean_cor_dat <- readRDS("insert_path_to_RDS_data_file_here")
-
 # BP correlations in average performance
 for_cor_BP <-
   clean_cor_dat %>% 
@@ -145,7 +50,7 @@ for_cor_BP <-
   theme(legend.position = "bottom")
 
 # average WP correlations
-# warning message if participant doesn't exhibit variation - cor set to NA, 
+# Will throw warning if participant doesn't exhibit variation - cor set to NA, 
 # handled in subsequent filter step prior to mean calculation
 for_cor_WP <-
   clean_cor_dat %>% 
@@ -172,20 +77,16 @@ for_cor_WP <-
              colors = c("#6D9EC1", "white", "#E46726")) +
   theme(legend.position = "bottom")
 
-ggsave(paste0(path_new, "/file_name.tiff"), for_cor_BP, width = 8, height = 6, 
+ggsave("outputs/BP_corrmat.tiff", for_cor_BP, width = 8, height = 6, 
        units = "in", bg = "white")
-ggsave(paste0(path_new, "/file_name.tiff"), for_cor_WP, width = 8, height = 6, 
+ggsave("outputs/WP_corrmat.tiff", for_cor_WP, width = 8, height = 6, 
        units = "in", bg = "white")
-
-rm(list = setdiff(ls(), c("path_new", "rmse", "R2", "unnest_kfold", 
-                          "perf_cal", "recode_func")))
 
 # -------------------------------
-# Predictors in full model
+# Part 3: Identify predictors in full model
 # -------------------------------
-
 # read-in output from BayesianPrediction
-files <- list.files(path_new, pattern = "_CVfits.rds$", full.names = TRUE)
+files <- list.files("model_results", pattern = "_CVfits.rds$", full.names = TRUE)
 rds_list <- map(files, read_rds) %>% bind_rows()
 
 # ICC
@@ -205,7 +106,7 @@ diagnostics <-
   unnest_wider(c(rhat)) %>%
   rename(min_rhat = fn1, max_rhat = fn2)
 
-# Comparing nested models
+# Comparing models based on elpd
 # Recommend elpd_diff > 4(se_diff), where larger elpd is better
 model_comparisons <-
   rds_list %>% 
@@ -228,9 +129,9 @@ model_comparisons %>%
   kbl("html", digits = 3) %>%
   kable_classic(html_font = "Cambria", "basic", "center", full_width = TRUE) %>%
   pack_rows(index = table(model_comparisons$method)) %>%
-  cat(., file = "~/path/file_name.html")
+  cat(., file = "outputs/model_comps.html")
   
-# Performance in full sample - output table with model results
+# Output table with model results
 draws_fixedEffects_unnested <- 
   rds_list %>%
   select(key, fit_bayes_horse_reTrue, fit_bayes_horse_Int) %>% 
@@ -256,9 +157,9 @@ draws_fixedEffects_unnested %>%
                     (draws_fixedEffects_unnested$conf.low > 0 & draws_fixedEffects_unnested$conf.high > 0), 
                   "lightgray", "white")) %>%
   pack_rows(index = table(draws_fixedEffects_unnested$variable)) %>%
-  cat(., file = "~/path/file_name.html")
+  cat(., file = "outputs/brms_tables.html")
 
-# Performance in full sample - output figure with model results
+# Output figure with model results
 draws_fixedEffects <- 
   rds_list %>%
   select(key, fit_bayes_horse_reTrue) %>% 
@@ -314,18 +215,17 @@ comb_full <-
       plot_fixedEffects$plots[[4]] + theme(legend.position = "none"), 
       align = "vh", nrow = 2), legend, nrow = 2, rel_heights = c(9, 1))
 
-ggsave(paste0(path_new, "/file_name.tiff"), comb_full, width = 12, height = 8, 
+ggsave("outputs/predictors_full_mod.tiff", comb_full, width = 12, height = 8, 
        units = "in", bg = "white")
 
 # -------------------------------
-# Predictors across CV runs
+# Part 4: Predictors across CV runs
 # -------------------------------
-
-# evaluating stability of predictors across across folds in
-# grouped and stratified CV
+# evaluating stability of predictors across across folds in grouped and stratified CV
 CV_draws <- 
   rds_list %>%
-  select(key, fit_bayes_horse_reTrueCV_stratefied, fit_bayes_horse_reTrueCV_grouped, fit_bayes_horse_IntCV_stratefied) %>% 
+  select(key, fit_bayes_horse_reTrueCV_stratefied, 
+         fit_bayes_horse_reTrueCV_grouped, fit_bayes_horse_IntCV_stratefied) %>% 
   gather(key = model, value = value, -key) %>%
   mutate(kfold = map(.x = value, ~unnest_kfold(.x, 5, widths = c(.95, .9, .85, .8))))
 
@@ -385,15 +285,13 @@ comb3 <- cowplot::plot_grid(
                      align = "vh", nrow = 4), 
   legend2, nrow = 1, rel_widths = c(15, 1))
 
-ggsave(paste0(path_new, "/file_name.tiff"), comb2, width = 15, height = 15, units = "in", bg = "white")
-ggsave(paste0(path_new, "/file_name.tiff"), comb3, width = 15, height = 15, units = "in", bg = "white")
-
+ggsave("outputs/kfold_stratified.tiff", comb2, width = 15, height = 15, units = "in", bg = "white")
+ggsave("outputs/kfold_grouped.tiff", comb3, width = 15, height = 15, units = "in", bg = "white")
 
 # -------------------------------
-# Performance, evaluated wrt R2
+# Part 5: Overall performance evaluated wrt R2
 # -------------------------------
-
-rm(list = setdiff(ls(), c("rds_list", "perf_cal", "recode_fun", "R2")))
+rm(list = setdiff(ls(), c("rds_list", "perf_cal", "recode_func", "R2", "path")))
 
 # one of either "predict" or "fitted"
 kfold_method <- "predict"
@@ -420,7 +318,7 @@ performance_summ <-
   summarise(mean = round(mean(perfor), 4)) %>%
   mutate(mean_chr = paste0("Mean R<sup>2</sup><br>**", mean*100, "%**"))
 
-# grouped random intercept models: negative correlation messed up sorting for lower vs. upper CI. 
+# Note: in grouped random intercept models, negative correlation messed up sorting LCI vs. UCI 
 # When this happened, examined folds and computed LCI, UCI manually
 R2_with_CI <- 
   performance %>% 
@@ -493,18 +391,14 @@ tmp4 <-
   theme(text = element_text(size = 18)) +
   ylim(0, 1.05) 
 
-path_new <- "specify_directory_here"
-ggsave(paste0(path_new, "/CV_performance_", kfold_method, ".tiff"), tmp3, 
+ggsave(paste0("outputs/CV_performance_vis1_", kfold_method, ".tiff"), tmp3, 
        width = 10, height = 8.5, units = "in", bg = "white")
-ggsave(paste0(path_new, "/CV_performance2_", kfold_method, ".tiff"), tmp4, 
+ggsave(paste0("outputs/CV_performance_vis2_", kfold_method, ".tiff"), tmp4, 
        width = 9, height = 7, units = "in", bg = "white")
-rm(list = setdiff(ls(), c("rds_list", "perf_cal", "recode_fun", "R2",
-                          "performance", "performance_summ", "dodge")))
 
 # ---------------------------------
-# Visualizing circadian effects
+# Part 6: Visualizing circadian effects
 # ---------------------------------
-
 rds_subsetted <- 
   rds_list %>% 
   select(key, data, data_GM, fit_bayes_horse_reTrue) %>%
@@ -562,6 +456,7 @@ all_pred <-
 legend3 <- cowplot::get_legend(
   all_pred$plots[[1]] + theme(legend.position = "bottom")
 )
+
 interaction_plots <-
   cowplot::plot_grid(
     cowplot::plot_grid(all_pred$plots[[1]] + theme(legend.position = "none"), 
@@ -571,6 +466,6 @@ interaction_plots <-
                        align = "vh", nrow = 2), 
     legend3, nrow = 2, rel_heights = c(9, 1))
 
-ggsave(paste0(path_new, "/file_name.tiff"), interaction_plots, 
+ggsave("outputs/circadian_plots.tiff", interaction_plots, 
        width = 9, height = 6, units = "in", bg = "white")
 
