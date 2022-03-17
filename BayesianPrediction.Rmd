@@ -16,142 +16,54 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, include = FALSE}
-library(tidyverse)
-library(foreach)
-library(ggplot2)
-library(bayesplot) 
-library(brms)
-library(rstan)
-library(caret)
-library(rsample)
-library(tidybayes)
-library(loo)
-library(furrr)
-library(lme4)
-```
-
-# Functions
-```{r}
-cent_scale <- function(dat, method = c("GM", "CWC")) {
-  
-  method <- match.arg(method)
-  
-  if (method == "GM") {
-    
-    # grand mean centering
-    df <- dat %>%
-      mutate_if(is.numeric, ~((.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE)))
-    
-  } else if (method == "CWC") {
-
-    # scale numeric data within clusters
-    df <- dat %>%
-      group_by(user_id) %>%
-      mutate_if(is.numeric, ~((.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE))) %>%
-      mutate_if(is.numeric, ~if_else(is.nan(.), 0, .)) %>%
-      ungroup()
-    
-  } else {
-    print("ERROR")
-  }
-  
-  return(df)
+#---------------------------
+# Part 1: Prep data, create output directories, load libraries
+#---------------------------
+home <- ""
+if (home == "") {
+  home <- getwd()
+} else {
+  setwd(home)
 }
 
-modeling_func <- function(train, key, chain_num = 4, cores = 4,
-                          iter_num = 2000, mod = c("all", "WP", "int")) {
-  
-  mod <- match.arg(mod)
-  
-  # create formula to evaluate all variables in relation to cog outcomes
-  df_all <- train %>% select(-value, -user_id, -study_time, -sitting_id)
-  formula_all <- paste0(names(df_all), collapse=" + ")
-  
-  # create formula to evaluate WP predictors of variation around WP means
-  to_elim <- c("age", "education", "gender", "englishPrimary",
-                "wakeUpTypical", "wakeUpEarliest", "wakeUpLatest",
-                "goToSleepTypical", "goToSleepEarliest", "goToSleepLatest",
-                "user_id", "value", "study_time", "screenW", "screenH", "sitting_id")
-  df_WP <- train %>% select(-all_of(to_elim))
-  formula_WP <- paste0(names(df_WP), collapse=" + ")
-  
-  # if - else logic
-  if (mod == "all") {
-    formula <- as.formula(paste0("value ~ 1 + ", formula_all, 
-                                 " + age:cos_studytime + age:sin_studytime + I(age^2) + (1 | user_id)"))
-    fit_bayes_horse <- brm(formula, 
-                           data = train, family = 'gaussian',
-                           prior = c(prior(horseshoe(df = 4), class = "b"),
-                                     prior(cauchy(0, 1), class = "sigma"),
-                                     prior(normal(0, 1), class = "sd"),
-                                     prior(normal(0, 1), class = "Intercept")),
-                           chains = chain_num, iter = iter_num,
-                           control = list(adapt_delta = .99, max_treedepth = 15),
-                           cores = 4, file = paste0(path, key, "_re"))
-  } else if (mod == "WP") {
-    formula <- as.formula(paste0("value ~ 1 + ", formula_WP, " + (1 | user_id)"))
-    fit_bayes_horse <- brm(formula, 
-                           data = train, family = 'gaussian',
-                           prior = c(prior(horseshoe(df = 4), class = "b"),
-                                     prior(cauchy(0, 1), class = "sigma"),
-                                     prior(normal(0, 1), class = "sd"),
-                                     prior(normal(0, 1), class = "Intercept")),
-                           chains = chain_num, iter = iter_num,
-                           control = list(adapt_delta = .99, max_treedepth = 15),
-                           cores = 4, file = paste0(path, key, "_fe"))
-  } else if (mod == "int") {
-    formula <- as.formula(paste0("value ~ 1 + (1 | user_id)"))
-    fit_bayes_horse <- brm(formula, 
-                           data = train, family = 'gaussian',
-                           prior = c(prior(cauchy(0, 1), class = "sigma"),
-                                     prior(normal(0, 1), class = "sd"),
-                                     prior(normal(0, 1), class = "Intercept")),
-                           chains = chain_num, iter = iter_num,
-                           control = list(adapt_delta = .99, max_treedepth = 15), 
-                           cores = 4, file = paste0(path, key, "_int"))
-  } else {
-    print("ERROR")
-  }
-  
-  return(fit_bayes_horse)
+source("BayesianPredictionFuncs.R")
+my_dat <- readRDS("cleanData.rds")
+load_libraries()
+
+# create output directories
+if (!dir.exists(paste0(home, "/model_results"))) {
+  dir.create(paste0(home, "/model_results"))
+} else {
+  print("Directory already exists")
 }
 
-rmse <- function(y, yrep) {
-  yrep_mean <- colMeans(yrep)
-  return(sqrt(mean((yrep_mean - y)^2)))
+if (!dir.exists(paste0(home, "/outputs"))) {
+  dir.create(paste0(home, "/outputs"))
+} else {
+  print("Directory already exists")
 }
 
-R2 <- function(y, yrep) {
-  yrep_mean <- colMeans(yrep)
-  x <- cor.test(y, yrep_mean)
-  corre <- x$estimate**2
-  return(corre[[1]])
-}
+# output data
+path <- paste0(home, "/model_results/")
 ```
 
 ```{r, messages = FALSE, warnings = FALSE}
+#---------------------------
+# Part 2: Primary analyses
+#---------------------------
+
 # stratified predicts new observations from the same sample
 # grouped predicts new individuals
 # reTrue takes random effects into account, reFalse doesn't
 # Int is random-effect, intercept-only model
 
-######################
-library(lmerTest)
-library(kableExtra)
-library(scales)
-
-# import data
-my_dat <- readRDS("~/insert_path_to_RDS_here.rds")
-
-# output data
-path <- "~/specify_output_directory_here/"
-
 run <- TRUE
-
 if (run) {
   
   # chose whether to analyze outcomes individually vs. in the aggregate
-  DVs <- c("GCPT_medianRTc")
+  DV_list <- my_dat$key
+  DV_num <- c(1)
+  DVs <- DV_list[DV_num]
   
   for (index in DVs) {
     chain_num <- 4
@@ -193,18 +105,19 @@ if (run) {
 ```
 
 ```{r}
-# next step: post-hoc analyses to disaggregate inter- and intra-individual variance for significant effects
-# restrict focus to self-report EMA variables bc we can't center age within clusters, and it 
-# doesn't make sense to talk about between-person variation in mean levels of time, study days, test position, etc.
+#---------------------------
+# Part 2: Post-hoc analyses
+#---------------------------
 
-DV_list <- c("CRT_medianRTc", "DS_medianRTc", "GCPT_dprime", "MOT_percent_correct")
+# Post-hoc analyses to disaggregate inter- and intra-individual variance for significant effects
+load_posthoc_libraries()
 
 for (i in DV_list) {
   
   if (i == "CRT_medianRTc") {
     DV_WP <- c("alert_sleepiness", "attention_forgetful")
   } else if (i == "DS_medianRTc") {
-    # Inserting composites given correlations >= .5
+    # Inserting composites given correlations >= .5 + method less robust to multi-collinearity
     DV_WP <- c("context_composite", "alert_composite",
                "anx_dep_emotions_that_everything_was_an_effort")
   } else if (i == "GCPT_dprime") {
@@ -262,10 +175,10 @@ mod2 %>%
   select(-var, -effect, -group) %>%
   kbl("html", digits = 3) %>%
   kable_classic(html_font = "Cambria", "basic", "center", full_width = F) %>%
-  column_spec(1:6, 
+  column_spec(1:8, 
               background = if_else(mod2$p.value < .1, "lightgray", "white"), 
               color = if_else(str_detect(mod2$term, "cwc"), "red", "black")) %>%
   pack_rows(index = table(mod2$var)) %>%
-  cat(., file = "~/specify_output_directory_here/filename.html")
+  cat(., file = "outputs/posthoc_withCI.html")
 ```
 
