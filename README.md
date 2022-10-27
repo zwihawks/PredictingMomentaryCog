@@ -1,7 +1,7 @@
 # PredictingMomentaryCog
 Respository contains data, code, and resources associated with the manuscript "Accurate prediction of momentary cognition from intensive longitudinal data."
 
-Authors: Zoe W. Hawks, Roger Strong, Lanee Jung, Emorie D. Beck, Eliza J. Passell, Elizabeth Grinspoon, Martin Sliwinski, and Laura G. Germine
+Authors: Zoe W. Hawks, Roger Strong, Lanee Jung, Emorie D. Beck, Eliza J. Passell, Elizabeth Grinspoon, Shifali Singh, Madelyn Frumkin, Martin Sliwinski, and Laura G. Germine
 
 #### Description of files:
 
