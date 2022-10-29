@@ -8,7 +8,8 @@ Authors: Zoe W. Hawks, Roger Strong, Laneé Jung, Emorie D. Beck, Eliza J. Passe
 1. Links to cognitive EMA tasks used for data collection (CogEMA_tasks.rtf).  
 2. Data analyzed in current study (cleanData.rds).  
 3. Analysis (BayesianPrediction.Rmd) and visualization (VisualizeResults.R) code.  
-2. Functions sourced by analysis (BayesianPredictionFuncs.R) and visualization (VisualizeResultsFuncs.R) code.  
+4. Functions sourced by analysis (BayesianPredictionFuncs.R) and visualization (VisualizeResultsFuncs.R) code.  
+5. Data (analyzed using code in 3 & 4, above) and results for conditional models re-estimated with counts of careless and missing responses among between-person predictors (Secondary_analysis.zip).  
 
 #### Additional notes:  
 
