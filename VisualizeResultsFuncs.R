@@ -55,7 +55,7 @@ unnest_kfold <- function(kfld, folds, widths) {
   return(df)
 }
 
-perf_cal <- function(kf, kfp, method = c("avg", "ind")) {
+perf_cal <- function(kf, kfp, method = c("avg", "ind"), metric = c("R2", "RMSE")) {
   method <- match.arg(method)
   
   pr <- kf$fits[, "predicted"]
@@ -78,19 +78,28 @@ perf_cal <- function(kf, kfp, method = c("avg", "ind")) {
         real <- kfp$y[pr[[i]]]
         predicted <- kfp$yrep[j, pr[[i]]]
         
-        r2 <- R2(real, predicted)[[1]]
+        if (metric == "R2") {
+          out <- R2(real, predicted)[[1]]
+        } else {
+          out <- rmse(real, predicted)
+        }
         
-        df[m, 2] <- r2
+        df[m, 2] <- out
         m <- m + 1
       }
     } else if (method == "avg") {
       real <- kfp$y[pr[[i]]]
       predicted <- colMeans(kfp$yrep[, pr[[i]]])
-      r2 <- R2(real, predicted)
       
-      df[m, 2] <- r2[[1]]
-      df[m, 3] <- r2[[2]]
-      df[m, 4] <- r2[[3]]
+      if (metric == "R2") {
+        out <- R2(real, predicted)
+      } else {
+        out <- rep(rmse(real, predicted), times = 3)
+      }
+      
+      df[m, 2] <- out[[1]]
+      df[m, 3] <- out[[2]]
+      df[m, 4] <- out[[3]]
       m <- m + 1
     }
     print(i)

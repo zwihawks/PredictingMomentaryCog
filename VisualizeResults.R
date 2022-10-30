@@ -141,10 +141,18 @@ draws_fixedEffects_unnested <-
   mutate(model = if_else(str_detect(model, "Int"), "Intercept", "Full"),
          key = map2_chr(.x = key, .y = model, ~paste(.x, .y, sep = "_"))) %>%
   mutate(summarised_tabls = map(.x = value, 
-                                ~(broom.mixed::tidy(.x) %>% mutate(term = recode_func(term)) %>%
-                                    select(-component)))) %>% 
-  select(key, summarised_tabls) %>%
-  unnest(c(summarised_tabls)) %>%
+                                ~(broom.mixed::tidy(.x) %>% 
+                                    mutate(term = recode_func(term)) %>%
+                                    select(-component))),
+         pd = map(.x = value, 
+                  ~p_direction(.x, method = "direct", null = 0) %>%
+                    as.data.frame(.) %>% 
+                    mutate(term = recode_func(str_remove(Parameter, "b_")),
+                           term = if_else(term == "Intercept", "(Intercept)", term)) %>%
+                    select(term, pd)),
+         comb = map2(.x = summarised_tabls, .y = pd, ~left_join(.x, .y))) %>% 
+  select(key, comb) %>%
+  unnest(c(comb)) %>%
   rename(variable = key) %>%
   arrange(variable, estimate)
 
@@ -153,11 +161,16 @@ draws_fixedEffects_unnested %>%
   select(-variable) %>%
   kbl("html", digits = 3) %>%
   kable_classic(html_font = "Cambria", "basic", "center", full_width = F) %>%
-  column_spec(1:7, background = 
+  column_spec(1:8, 
+              background = 
                 if_else(
                   (draws_fixedEffects_unnested$conf.low < 0 & draws_fixedEffects_unnested$conf.high < 0) |
                     (draws_fixedEffects_unnested$conf.low > 0 & draws_fixedEffects_unnested$conf.high > 0), 
                   "lightgray", "white")) %>%
+  column_spec(8, 
+              color = 
+                if_else(draws_fixedEffects_unnested$pd >= .95 & !is.na(draws_fixedEffects_unnested$pd), 
+                        "red", "black")) %>%
   pack_rows(index = table(draws_fixedEffects_unnested$variable)) %>%
   cat(., file = "outputs/brms_tables.html")
 
@@ -291,112 +304,122 @@ ggsave("outputs/kfold_stratified.tiff", comb2, width = 15, height = 15, units = 
 ggsave("outputs/kfold_grouped.tiff", comb3, width = 15, height = 15, units = "in", bg = "white")
 
 # -------------------------------
-# Part 5: Overall performance evaluated wrt R2
+# Part 5: Overall performance evaluated wrt RMSE or R2
 # -------------------------------
 rm(list = setdiff(ls(), c("rds_list", "perf_cal", "recode_func", "R2", "path")))
 
 # one of either "predict" or "fitted"
+# object + variable names are keyed to R2, but can also be used for RMSE
 kfold_method <- "predict"
+metric <- c("R2", "rmse")[1]
 performance <- 
   rds_list %>%
   select(key, fit_bayes_horse_reTrueCV_stratefied, fit_bayes_horse_reTrueCV_grouped, 
          fit_bayes_horse_IntCV_stratefied, fit_bayes_horse_IntCV_grouped) %>% 
   gather(key = model, value = value, -key) %>%
   mutate(kfp = map(.x = value, ~kfold_predict(.x, method = kfold_method)),
-         R2 = map2(.x = kfp, .y = value, ~perf_cal(.y, .x, method = "avg")))
+         R2 = map2(.x = kfp, .y = value, ~perf_cal(.y, .x, method = "avg", metric = metric)))
 
-# Compute R2 by model type
-performance_summ <- 
-  performance %>% 
-  mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
-  select(-value, -kfp) %>%
-  unnest(R2) %>%
-  mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
-         model = if_else(model == "IntCV_stratefied", "(3)", model),
-         model = if_else(model == "reTrueCV_grouped", "(2)", model),
-         model = if_else(model == "IntCV_grouped", "(4)", model),
-         key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
-  group_by(key, model) %>%
-  summarise(mean = round(mean(perfor), 4)) %>%
-  mutate(mean_chr = paste0("Mean R<sup>2</sup><br>**", mean*100, "%**"))
-
-# Note: in grouped random intercept models, negative correlation messed up sorting LCI vs. UCI 
-# When this happened, examined folds and computed LCI, UCI manually
-R2_with_CI <- 
+# mean, min, and max performance across folds
+multiplier <- ifelse(metric == "R2", 100, 1)
+R2_with_range <- 
   performance %>% 
   mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
   select(-value, -kfp) %>%
   unnest(R2) %>%
   group_by(key, model) %>%
-  summarise_at(vars(perfor, lower, upper), .funs = c(mean))
+  summarise(r2 = mean(perfor),
+            lower = min(perfor), 
+            upper = max(perfor)) %>%
+  mutate(comb = paste0(round(r2*multiplier, 2), " (", 
+                       round(lower*multiplier, 2), ", ", 
+                       round(upper*multiplier, 2), ")")) %>%
+  select(key, model, comb)
 
-# Visualize R2 by model type, method #1
-dodge <- position_dodge(width = 1)  
-tmp3 <- 
-  performance %>%
-  mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
-  select(-value, -kfp) %>%
-  unnest(R2) %>%
-  mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
-         model = if_else(model == "IntCV_stratefied", "(3)", model),
-         model = if_else(model == "reTrueCV_grouped", "(2)", model),
-         model = if_else(model == "IntCV_grouped", "(4)", model),
-         key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
-  ggplot(., aes(x = fold, y = perfor, fill = factor(fold))) +
-  geom_segment(data = performance_summ, 
-               aes(y = mean, yend = mean, color = "red4"), x = 0, xend = 6, lty = 2, 
-               size = 1, inherit.aes = FALSE) +
-  geom_errorbar(aes(ymin = lower, ymax = upper), position = dodge, width = .2) +
-  geom_point(aes(fill = factor(fold)), position = dodge, shape = 21, size = 2) +
-  facet_grid(key~model) +
-  geom_richtext(data = performance_summ, 
-            aes(label = mean_chr, y = .92, x = .5, hjust = 0), 
-            inherit.aes = FALSE, size = 3.5) +
-  theme_bw() + labs(x = "Fold", y = expression(R^2),
-                    title = "Cross-Validated Prediction", color = "Mean") +
-  scale_fill_manual(values = rep("red4", times = 5))  + 
-  guides(fill = "none", color = guide_legend(override.aes = list(lty = 1, size = 3))) +
-  scale_color_hue(labels = expression(R^2)) +
-  theme(text = element_text(size = 12, face = "bold")) +
-  ylim(0, 1.02) 
-
-# Visualize R2 by model type, method #2
-dodge <- position_dodge(width = .3) 
-tmp4 <- 
-  performance %>%
-  mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
-  select(-value, -kfp) %>%
-  unnest(R2) %>%
-  mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
-         model = if_else(model == "IntCV_stratefied", "(3)", model),
-         model = if_else(model == "reTrueCV_grouped", "(2)", model),
-         model = if_else(model == "IntCV_grouped", "(4)", model),
-         key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
-  ggplot(., aes(x = model, y = perfor, fill = factor(fold))) +
-  geom_errorbar(aes(ymin = lower, ymax = upper), position = dodge, width = .2) +
-  geom_point(aes(fill = factor(fold)), position = dodge, shape = 21, size = 2) +
-  geom_point(data = performance_summ,
+if (metric == "R2") {
+  # Compute R2 by model type, to be used for plotting
+  performance_summ <- 
+    performance %>% 
+    mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
+    select(-value, -kfp) %>%
+    unnest(R2) %>%
+    mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
+           model = if_else(model == "IntCV_stratefied", "(3)", model),
+           model = if_else(model == "reTrueCV_grouped", "(2)", model),
+           model = if_else(model == "IntCV_grouped", "(4)", model),
+           key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
+    group_by(key, model) %>%
+    summarise(mean = round(mean(perfor), 4)) %>%
+    mutate(mean_chr = paste0("Mean R<sup>2</sup><br>**", mean*100, "%**"))
+  
+  # Visualize R2 by model type, method #1
+  dodge <- position_dodge(width = 1)  
+  tmp3 <- 
+    performance %>%
+    mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
+    select(-value, -kfp) %>%
+    unnest(R2) %>%
+    mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
+           model = if_else(model == "IntCV_stratefied", "(3)", model),
+           model = if_else(model == "reTrueCV_grouped", "(2)", model),
+           model = if_else(model == "IntCV_grouped", "(4)", model),
+           key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
+    ggplot(., aes(x = fold, y = perfor, fill = factor(fold))) +
+    geom_segment(data = performance_summ, 
+                 aes(y = mean, yend = mean, color = "red4"), x = 0, xend = 6, lty = 2, 
+                 size = 1, inherit.aes = FALSE) +
+    geom_errorbar(aes(ymin = lower, ymax = upper), position = dodge, width = .2) +
+    geom_point(aes(fill = factor(fold)), position = dodge, shape = 21, size = 2) +
+    facet_grid(key~model) +
+    geom_richtext(data = performance_summ, 
+                  aes(label = mean_chr, y = .92, x = .5, hjust = 0), 
+                  inherit.aes = FALSE, size = 3.5) +
+    theme_bw() + labs(x = "Fold", y = expression(R^2),
+                      title = "Cross-Validated Prediction", color = "Mean") +
+    scale_fill_manual(values = rep("red4", times = 5))  + 
+    guides(fill = "none", color = guide_legend(override.aes = list(lty = 1, size = 3))) +
+    scale_color_hue(labels = expression(R^2)) +
+    theme(text = element_text(size = 12, face = "bold")) +
+    ylim(0, 1.02) 
+  
+  # Visualize R2 by model type, method #2
+  dodge <- position_dodge(width = .3) 
+  tmp4 <- 
+    performance %>%
+    mutate(model = str_remove(model, "fit_bayes_horse_")) %>%
+    select(-value, -kfp) %>%
+    unnest(R2) %>%
+    mutate(model = if_else(model == "reTrueCV_stratefied", "(1)", model),
+           model = if_else(model == "IntCV_stratefied", "(3)", model),
+           model = if_else(model == "reTrueCV_grouped", "(2)", model),
+           model = if_else(model == "IntCV_grouped", "(4)", model),
+           key = key %>% str_replace(., "_", ": ") %>% str_replace(., "_", " ")) %>%
+    ggplot(., aes(x = model, y = perfor, fill = factor(fold))) +
+    geom_errorbar(aes(ymin = lower, ymax = upper), position = dodge, width = .2) +
+    geom_point(aes(fill = factor(fold)), position = dodge, shape = 21, size = 2) +
+    geom_point(data = performance_summ,
                aes(y = mean, x = model, color = "red3"), fill = "transparent",
                size = 5, inherit.aes = FALSE, shape = 18) +
-  facet_wrap(~key, nrow = 2) +
-  geom_richtext(data = performance_summ,
-                aes(label = mean_chr, y = rep(c(.9), 16), x = model),
-                inherit.aes = FALSE,
-                label.padding = unit(c(.15), "lines"),
-                size = 4) +
-  theme_bw() + labs(x = "", y = "Variance explained",
-                    title = "", color = "", fill = "Fold") +
-  scale_fill_brewer(palette = "Blues")  + 
-  guides(color = guide_legend(override.aes = list(lty = 1, size = 5, order = 2)),
-         fill = guide_legend(order = 1)) +
-  scale_color_manual(labels = "Mean", values = "red3") +
-  theme(text = element_text(size = 18)) +
-  ylim(0, 1.05) 
-
-ggsave(paste0("outputs/CV_performance_vis1_", kfold_method, ".tiff"), tmp3, 
-       width = 10, height = 8.5, units = "in", bg = "white")
-ggsave(paste0("outputs/CV_performance_vis2_", kfold_method, ".tiff"), tmp4, 
-       width = 9, height = 7, units = "in", bg = "white")
+    facet_wrap(~key, nrow = 2) +
+    geom_richtext(data = performance_summ,
+                  aes(label = mean_chr, y = rep(c(.9), 16), x = model),
+                  inherit.aes = FALSE,
+                  label.padding = unit(c(.15), "lines"),
+                  size = 4) +
+    theme_bw() + labs(x = "", y = "Variance explained",
+                      title = "", color = "", fill = "Fold") +
+    scale_fill_brewer(palette = "Blues")  + 
+    guides(color = guide_legend(override.aes = list(lty = 1, size = 5, order = 2)),
+           fill = guide_legend(order = 1)) +
+    scale_color_manual(labels = "Mean", values = "red3") +
+    theme(text = element_text(size = 18)) +
+    ylim(0, 1.05) 
+  
+  ggsave(paste0("outputs/CV_performance_vis1_", kfold_method, ".tiff"), tmp3, 
+         width = 10, height = 8.5, units = "in", bg = "white")
+  ggsave(paste0("outputs/CV_performance_vis2_", kfold_method, ".tiff"), tmp4, 
+         width = 9, height = 7, units = "in", bg = "white")
+}
 
 # ---------------------------------
 # Part 6: Visualizing circadian effects
