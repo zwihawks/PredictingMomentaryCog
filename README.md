@@ -9,7 +9,7 @@ Authors: Zoe W. Hawks, Roger Strong, Laneé Jung, Emorie D. Beck, Eliza J. Passe
 2. Data analyzed in current study (cleanData.rds).  
 3. Analysis (BayesianPrediction.Rmd) and visualization (VisualizeResults.R) code.  
 4. Functions sourced by analysis (BayesianPredictionFuncs.R) and visualization (VisualizeResultsFuncs.R) code.  
-5. Data + results associated with conditional models that included careless and missing responses among between-person predictors (Secondary_analysis.zip).  
+5. Data + results associated with conditional models that included careless and missing responses among between-person predictors (Secondary_analysis.zip). Refer to S2 for additional details.  
 
 #### Additional notes:  
 
